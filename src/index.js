@@ -1,5 +1,6 @@
 import L from 'leaflet';
 import { TrackLayer } from './trackLayer';
+import { Draw } from './draw';
 
 L.TrackAnimation = L.Class.extend({
   includes: L.Evented.prototype || L.Mixin.Events,
@@ -30,18 +31,31 @@ L.TrackAnimation = L.Class.extend({
   initialize(map, latlngs, options) {
     L.Util.setOptions(this, options);
     this._map = map;
+    // 初始化轨迹数据
     this._latlngs = latlngs.map(d => {
       return L.latLng(d);
     });
+    // 初始化轨迹 layer 并添加到地图
     this._layer = new TrackLayer().addTo(map);
+    // 获取 canvas 
     this._canvas = this._layer.getContainer();
+    // 获取绘制上下文
     this._ctx = this._layer.getContext();
+    // 初始化 绘制 实例
+    this._draw = new Draw(this);
 
+    // 初始化参数
+    // 当前绘制进度 0 - 1
     this._percent = null;
+    // 是否正在绘制
     this._animating = false;
+    // 帧 计时器
     this._timer = null;
+    // 上一帧 时间戳
     this._fpsStartTime = null;
+    // 绘制记录
     this._bufferTracks = [];
+    // 扩充的 轨迹数据
     this._expandTracks = this._addPath(this._latlngs);
 
     const img = new Image();
@@ -55,41 +69,57 @@ L.TrackAnimation = L.Class.extend({
     img.src = 'https://linghuam.github.io/Leaflet.TrackPlayBack/examples/ship.png';
 
     this.on('tick', ({ percent }) => {
+      // 每一帧的处理
       this._handleTick(percent);
     });
     this.on('tickEnd', () => {
+      // 最后一帧结束的处理
       this._handleTickEnd();
     });
     this._layer.on('update', () => {
+      // 轨迹 layer update 的处理
       this._handleLayerUpdate();
     });
   },
   start() {
     if(this._animating) return;
     this._animating = true;
-    this._map.fitBounds(this._latlngs, {
-      duraion: 1000
-    });
+    // 开始绘制轨迹前，先调整地图的视角和缩放
+    this._map.fitBounds(this._latlngs);
+    // 如果有绘制记录，继续之前的绘制，启动 / 暂停 功能
     if(this._bufferTracks.length) {
+      // 根据绘制记录重置 _fpsStartTime 的值
       this._fpsStartTime = Date.now() - this.options.duraion * this._percent;
     }
+    // 开始 帧 绘制
     this._timer = L.Util.requestAnimFrame(this._tick, this);
   },
   stop() {
+    // 停止绘制轨迹
     if(!this._animating) return;
     this._animating = false;
     if(this._timer) {
+      // 停止 帧 绘制
       L.Util.cancelAnimFrame(this._timer);
       this._timer = null;
       this._fpsStartTime = null;
     }
   },
   replay() {
+    // 重新绘制轨迹动画
+    // 先停止绘制
+    // 清除绘制记录
+    // 开始绘制
     this.stop();
     this._bufferTracks = [];
     this.start();
   },
   remove() {
+    // 销毁轨迹绘制的实例
+    // 停止绘制
+    // 清除绘制记录
+    // 移除轨迹 layer
+    // 移除自定义事件
     this.stop();
     this._bufferTracks = [];
     this._layer.remove();
@@ -122,102 +152,17 @@ L.TrackAnimation = L.Class.extend({
     if(last) {
       this._map.setView(last);
     }
-    this._draw();
+    this._draw.render();
   },
   _handleTickEnd() {
     this._animating = false;
-    this._map.flyToBounds(this._latlngs);
+    this._map.flyToBounds(this._latlngs, {
+      duration: 1.2
+    });
   },
   _handleLayerUpdate() {
     if(this._animating) return;
-    this._draw();
-  },
-  _clearCanvas() {
-    const bounds = this._layer.getBounds();
-
-    if(bounds) {
-      const size = bounds.getSize();
-      this._ctx.clearRect(bounds.min.x, bounds.min.y, size.x, size.y);
-    } else {
-      this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
-    }
-  },
-  _draw() {
-    if(!this._bufferTracks.length) return;
-
-    this._clearCanvas();
-
-    const points = this._bufferTracks.map(d => {
-      const point = this._map.latLngToLayerPoint(d);
-      point.rotate = d.rotate;
-      return point;
-    });
-
-    // this._drawCanvasShip(points);
-    this._drawShipImage(points);
-    this._drawCanvasTrackLine(points);
-  },
-  _drawCanvasTrackLine(points) {
-    const ctx = this._ctx;
-    const length = points.length;
-    const first = points[0];
-
-    ctx.save();
-    ctx.beginPath();
-
-    ctx.strokeStyle = '#1C54E2';
-    ctx.lineWidth = 2;
-    ctx.globalAlpha = 0.3;
-
-    ctx.moveTo(first.x, first.y);
-
-    for(let i = 1; i < length; i++) {
-      ctx.lineTo(points[i].x, points[i].y);
-    }
-
-    ctx.stroke();
-    ctx.restore();
-  },
-  _drawCanvasShip(points) {
-    const ctx = this._ctx;
-    const w = 8;
-    const h = 20;
-    const dh = h / 3;
-    const length = points.length;
-    const last = points[length - 1];
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.fillStyle = 'green';
-    ctx.translate(last.x, last.y);
-    ctx.rotate(last.rotate + Math.PI);
-    
-    ctx.moveTo(0, 0 - h / 2);
-    ctx.lineTo(0 - w / 2, 0 - h / 2);
-    ctx.lineTo(0 - w / 2, 0 + h / 2 - dh);
-    ctx.lineTo(0, 0 + h / 2);
-    ctx.lineTo(0 + w / 2, 0 + h / 2 - dh);
-    ctx.lineTo(0 + w / 2, 0 - h / 2);
-
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-  },
-  _drawShipImage(points) {
-    if(!this._img) {
-      return this._drawCanvasShip(points);
-    }
-    const ctx = this._ctx;
-    const w = 12;
-    const h = 25;
-    const length = points.length;
-    const last = points[length - 1];
-
-    ctx.save();
-    ctx.translate(last.x, last.y);
-    ctx.rotate(last.rotate);
-    ctx.drawImage(this._img, - w / 2, - h / 2, w, h);
-    ctx.restore();
+    this._draw.render();
   },
   _addPath(latlngs) {
     const total_num = this.options.duraion / 10;
@@ -263,8 +208,7 @@ L.TrackAnimation = L.Class.extend({
     }
 
     return result;
-  },
-  _getLayerPoint() {}
+  }
 });
 
 L.trackAnimation = (map, latlngs, options) => {
